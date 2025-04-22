@@ -38,6 +38,7 @@ import org.apache.spark.sql.Column;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.functions;
 import org.apache.spark.sql.stats.ThetaSketchAgg;
 
 public class NDVSketchUtil {
@@ -45,21 +46,33 @@ public class NDVSketchUtil {
   private NDVSketchUtil() {}
 
   public static final String APACHE_DATASKETCHES_THETA_V1_NDV_PROPERTY = "ndv";
+  public static final String APACHE_DATASKETCHES_THETA_V1_MIN_PROPERTY = "min";
+  public static final String APACHE_DATASKETCHES_THETA_V1_MAX_PROPERTY = "max";
+  public static final String APACHE_DATASKETCHES_THETA_V1_NULL_COUNT_PROPERTY = "nullCount";
 
   static List<Blob> generateBlobs(
       SparkSession spark, Table table, Snapshot snapshot, List<String> columns) {
     Row sketches = computeNDVSketches(spark, table, snapshot, columns);
+    Row mins = computeMins(spark, table, snapshot, columns);
+    Row maxs = computeMaxs(spark, table, snapshot, columns);
+    Row nullCounts = computeNullCounts(spark, table, snapshot, columns);
     Schema schema = table.schemas().get(snapshot.schemaId());
     List<Blob> blobs = Lists.newArrayList();
     for (int i = 0; i < columns.size(); i++) {
       Types.NestedField field = schema.findField(columns.get(i));
       Sketch sketch = CompactSketch.wrap(Memory.wrap((byte[]) sketches.get(i)));
-      blobs.add(toBlob(field, sketch, snapshot));
+      blobs.add(toBlob(field, sketch, snapshot, mins.get(i), maxs.get(i), nullCounts.get(i)));
     }
     return blobs;
   }
 
-  private static Blob toBlob(Types.NestedField field, Sketch sketch, Snapshot snapshot) {
+  private static Blob toBlob(
+      Types.NestedField field,
+      Sketch sketch,
+      Snapshot snapshot,
+      Object min,
+      Object max,
+      Object nullCount) {
     return new Blob(
         StandardBlobTypes.APACHE_DATASKETCHES_THETA_V1,
         ImmutableList.of(field.fieldId()),
@@ -69,13 +82,53 @@ public class NDVSketchUtil {
         PuffinCompressionCodec.ZSTD,
         ImmutableMap.of(
             APACHE_DATASKETCHES_THETA_V1_NDV_PROPERTY,
-            String.valueOf((long) sketch.getEstimate())));
+            String.valueOf((long) sketch.getEstimate()),
+            APACHE_DATASKETCHES_THETA_V1_MIN_PROPERTY,
+            String.valueOf(min),
+            APACHE_DATASKETCHES_THETA_V1_MAX_PROPERTY,
+            String.valueOf(max),
+            APACHE_DATASKETCHES_THETA_V1_NULL_COUNT_PROPERTY,
+            String.valueOf((long) nullCount)));
   }
 
   private static Row computeNDVSketches(
       SparkSession spark, Table table, Snapshot snapshot, List<String> colNames) {
     Dataset<Row> inputDF = SparkTableUtil.loadTable(spark, table, snapshot.snapshotId());
     return inputDF.select(toAggColumns(colNames)).first();
+  }
+
+  private static Row computeMins(
+      SparkSession spark, Table table, Snapshot snapshot, List<String> colNames) {
+    Dataset<Row> inputDF = SparkTableUtil.loadTable(spark, table, snapshot.snapshotId());
+    return inputDF.select(toAggMinColumns(colNames)).first();
+  }
+
+  private static Row computeMaxs(
+      SparkSession spark, Table table, Snapshot snapshot, List<String> colNames) {
+    Dataset<Row> inputDF = SparkTableUtil.loadTable(spark, table, snapshot.snapshotId());
+    return inputDF.select(toAggMaxColumns(colNames)).first();
+  }
+
+  private static Row computeNullCounts(
+      SparkSession spark, Table table, Snapshot snapshot, List<String> colNames) {
+    Dataset<Row> inputDF = SparkTableUtil.loadTable(spark, table, snapshot.snapshotId());
+    return inputDF.select(toAggNullCounts(colNames)).first();
+  }
+
+  private static Column[] toAggMinColumns(List<String> colNames) {
+    return colNames.stream().map(Column::new).map(functions::min).toArray(Column[]::new);
+  }
+
+  private static Column[] toAggMaxColumns(List<String> colNames) {
+    return colNames.stream().map(Column::new).map(functions::max).toArray(Column[]::new);
+  }
+
+  private static Column[] toAggNullCounts(List<String> colNames) {
+    return colNames.stream()
+        .map(Column::new)
+        .map(functions::isnull)
+        .map(functions::count_if)
+        .toArray(Column[]::new);
   }
 
   private static Column[] toAggColumns(List<String> colNames) {
