@@ -45,6 +45,8 @@ public abstract class Aggregate<C extends Term> implements Expression {
     switch (op()) {
       case COUNT:
         return "count(" + term() + ")";
+      case COUNT_NULL:
+        return "count_null(" + term() + ")";
       case COUNT_STAR:
         return "count(*)";
       case MAX:

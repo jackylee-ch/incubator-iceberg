@@ -20,6 +20,7 @@ package org.apache.iceberg.types;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.CharBuffer;
@@ -40,7 +41,7 @@ public class Conversions {
   private static final String HIVE_NULL = "__HIVE_DEFAULT_PARTITION__";
 
   public static Object fromPartitionString(Type type, String asString) {
-    if (asString == null || HIVE_NULL.equals(asString)) {
+    if (asString == null || HIVE_NULL.equals(asString) || asString.equals("null")) {
       return null;
     }
 
@@ -65,7 +66,16 @@ public class Conversions {
       case BINARY:
         return asString.getBytes(StandardCharsets.UTF_8);
       case DECIMAL:
-        return new BigDecimal(asString);
+        if (Double.parseDouble(asString) == 0.0) {
+          return BigDecimal.ZERO;
+        } else {
+          BigDecimal decimal = new BigDecimal(asString);
+          if (decimal.scale() > decimal.precision()) {
+            return decimal.setScale(decimal.precision(), RoundingMode.HALF_UP);
+          } else {
+            return decimal;
+          }
+        }
       case DATE:
         return Literal.of(asString).to(Types.DateType.get()).value();
       default:

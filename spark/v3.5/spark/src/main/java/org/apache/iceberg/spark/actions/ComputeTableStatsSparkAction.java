@@ -102,7 +102,7 @@ public class ComputeTableStatsSparkAction extends BaseSparkAction<ComputeTableSt
         columns(),
         table.name(),
         snapshotId());
-    List<Blob> blobs = generateNDVBlobs();
+    List<Blob> blobs = generateStats();
     StatisticsFile statisticsFile = writeStatsFile(blobs);
     table.updateStatistics().setStatistics(snapshotId(), statisticsFile).commit();
     return ImmutableComputeTableStats.Result.builder().statisticsFile(statisticsFile).build();
@@ -125,8 +125,8 @@ public class ComputeTableStatsSparkAction extends BaseSparkAction<ComputeTableSt
     }
   }
 
-  private List<Blob> generateNDVBlobs() {
-    return NDVSketchUtil.generateBlobs(spark(), table, snapshot, columns());
+  private List<Blob> generateStats() {
+    return SparkStatsUtil.generateBlobs(spark(), table, snapshot, columns());
   }
 
   private List<String> columns() {

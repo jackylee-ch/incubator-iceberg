@@ -18,6 +18,7 @@
  */
 package org.apache.iceberg.spark.source;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +74,8 @@ import org.apache.iceberg.spark.source.metrics.TotalDataManifests;
 import org.apache.iceberg.spark.source.metrics.TotalDeleteFileSize;
 import org.apache.iceberg.spark.source.metrics.TotalDeleteManifests;
 import org.apache.iceberg.spark.source.metrics.TotalPlanningDuration;
+import org.apache.iceberg.types.Conversions;
+import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.SnapshotUtil;
@@ -97,6 +100,9 @@ import org.slf4j.LoggerFactory;
 abstract class SparkScan implements Scan, SupportsReportStatistics {
   private static final Logger LOG = LoggerFactory.getLogger(SparkScan.class);
   private static final String NDV_KEY = "ndv";
+  private static final String MIN_KEY = "min";
+  private static final String MAX_KEY = "max";
+  private static final String NULL_COUNT_KEY = "nullCount";
 
   private final JavaSparkContext sparkContext;
   private final Table table;
@@ -206,26 +212,9 @@ abstract class SparkScan implements Scan, SupportsReportStatistics {
 
         for (Map.Entry<Integer, List<BlobMetadata>> entry : groupedByField.entrySet()) {
           String colName = table.schema().findColumnName(entry.getKey());
+          Type colType = table.schema().findType(entry.getKey());
           NamedReference ref = FieldReference.column(colName);
-          Long ndv = null;
-
-          for (BlobMetadata blobMetadata : entry.getValue()) {
-            if (blobMetadata
-                .type()
-                .equals(org.apache.iceberg.puffin.StandardBlobTypes.APACHE_DATASKETCHES_THETA_V1)) {
-              String ndvStr = blobMetadata.properties().get(NDV_KEY);
-              if (!Strings.isNullOrEmpty(ndvStr)) {
-                ndv = Long.parseLong(ndvStr);
-              } else {
-                LOG.debug("{} is not set in BlobMetadata for column {}", NDV_KEY, colName);
-              }
-            } else {
-              LOG.debug("Blob type {} is not supported yet", blobMetadata.type());
-            }
-          }
-          ColumnStatistics colStats =
-              new SparkColumnStatistics(ndv, null, null, null, null, null, null);
-
+          ColumnStatistics colStats = estimateStatistics(entry.getValue(), colName, colType);
           colStatsMap.put(ref, colStats);
         }
       }
@@ -246,6 +235,49 @@ abstract class SparkScan implements Scan, SupportsReportStatistics {
     long rowsCount = taskGroups().stream().mapToLong(ScanTaskGroup::estimatedRowsCount).sum();
     long sizeInBytes = SparkSchemaUtil.estimateSize(readSchema(), rowsCount);
     return new Stats(sizeInBytes, rowsCount, colStatsMap);
+  }
+
+  private ColumnStatistics estimateStatistics(
+      List<BlobMetadata> blobMetadatas, String colName, Type colType) {
+    Long ndv = null;
+    Object min = null;
+    Object max = null;
+    Long nullCount = null;
+
+    for (BlobMetadata blobMetadata : blobMetadatas) {
+      if (blobMetadata
+          .type()
+          .equals(org.apache.iceberg.puffin.StandardBlobTypes.APACHE_DATASKETCHES_THETA_V1)) {
+        String ndvStr = blobMetadata.properties().get(NDV_KEY);
+        if (!Strings.isNullOrEmpty(ndvStr)) {
+          ndv = Long.parseLong(ndvStr);
+        } else {
+          LOG.debug("{} is not set in BlobMetadata for column {}", NDV_KEY, colName);
+        }
+
+        String minStr = blobMetadata.properties().get(MIN_KEY);
+        if (!Strings.isNullOrEmpty(minStr)) {
+          min = Conversions.fromByteBuffer(colType, StandardCharsets.UTF_8.encode(minStr));
+        } else {
+          LOG.debug("{} is not set in BlobMetadata for column {}", MIN_KEY, colName);
+        }
+        String maxStr = blobMetadata.properties().get(MAX_KEY);
+        if (!Strings.isNullOrEmpty(maxStr)) {
+          max = Conversions.fromByteBuffer(colType, StandardCharsets.UTF_8.encode(maxStr));
+        } else {
+          LOG.debug("{} is not set in BlobMetadata for column {}", MAX_KEY, colName);
+        }
+        String nullCountStr = blobMetadata.properties().get(NULL_COUNT_KEY);
+        if (!Strings.isNullOrEmpty(nullCountStr)) {
+          nullCount = Long.parseLong(nullCountStr);
+        } else {
+          LOG.debug("{} is not set in BlobMetadata for column {}", NULL_COUNT_KEY, colName);
+        }
+      } else {
+        LOG.debug("Blob type {} is not supported yet", blobMetadata.type());
+      }
+    }
+    return new SparkColumnStatistics(ndv, min, max, nullCount, null, null, null);
   }
 
   private long totalRecords(Snapshot snapshot) {

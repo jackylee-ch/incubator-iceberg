@@ -30,7 +30,7 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.spark.Spark3Util;
-import org.apache.iceberg.spark.actions.NDVSketchUtil;
+import org.apache.iceberg.spark.actions.SparkStatsUtil;
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.catalyst.parser.ParseException;
 import org.junit.jupiter.api.AfterEach;
@@ -132,6 +132,6 @@ public class TestComputeTableStatsProcedure extends ExtensionsTestBase {
     StatisticsFile statisticsFile = table.statisticsFiles().get(0);
     BlobMetadata blobMetadata = statisticsFile.blobMetadata().get(0);
     assertThat(blobMetadata.properties())
-        .containsKey(NDVSketchUtil.APACHE_DATASKETCHES_THETA_V1_NDV_PROPERTY);
+        .containsKey(SparkStatsUtil.APACHE_DATASKETCHES_THETA_V1_NDV_PROPERTY);
   }
 }
