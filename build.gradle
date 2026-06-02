@@ -478,9 +478,29 @@ project(':iceberg-aliyun') {
 }
 
 project(':iceberg-aws') {
+  def shadeAwsSdk =
+      project.hasProperty('shadeAwsSdk') && project.property('shadeAwsSdk').toString() != 'false'
+
+  if (shadeAwsSdk) {
+    apply plugin: 'com.gradleup.shadow'
+    tasks.jar.dependsOn tasks.shadowJar
+
+    configurations {
+      awsSdkShade
+    }
+  }
+
   test {
     useJUnitPlatform()
   }
+
+  def addAwsCompileOnlyDependency = { dependency ->
+    dependencies.add('compileOnly', dependency)
+    if (shadeAwsSdk) {
+      dependencies.add('awsSdkShade', dependency)
+    }
+  }
+
   dependencies {
     implementation project(path: ':iceberg-bundled-guava', configuration: 'shadow')
     api project(':iceberg-api')
@@ -494,20 +514,28 @@ project(':iceberg-aws') {
     implementation libs.jackson.core
     implementation libs.jackson.databind
 
-    compileOnly(platform(libs.awssdk.bom))
-    compileOnly(libs.awssdk.s3accessgrants)
-    compileOnly("software.amazon.awssdk:url-connection-client")
-    compileOnly("software.amazon.awssdk:apache-client")
-    compileOnly("software.amazon.awssdk:auth")
-    compileOnly("software.amazon.awssdk:http-auth-aws-crt")
-    compileOnly("software.amazon.awssdk:s3")
-    compileOnly("software.amazon.awssdk:kms")
-    compileOnly("software.amazon.awssdk:glue")
-    compileOnly("software.amazon.awssdk:sts")
-    compileOnly("software.amazon.awssdk:dynamodb")
-    compileOnly("software.amazon.awssdk:lakeformation")
-
-    compileOnly(libs.analyticsaccelerator.s3)
+    addAwsCompileOnlyDependency(platform(libs.awssdk.bom))
+    [
+      libs.awssdk.s3accessgrants,
+      "software.amazon.awssdk:url-connection-client",
+      "software.amazon.awssdk:apache-client",
+      "software.amazon.awssdk:auth",
+      "software.amazon.awssdk:http-auth-aws-crt",
+      "software.amazon.awssdk:s3",
+      "software.amazon.awssdk:kms",
+      "software.amazon.awssdk:glue",
+      "software.amazon.awssdk:sts",
+      "software.amazon.awssdk:dynamodb",
+      "software.amazon.awssdk:lakeformation",
+      libs.analyticsaccelerator.s3
+    ].each { addAwsCompileOnlyDependency(it) }
+    if (shadeAwsSdk) {
+      [
+        "software.amazon.awssdk:crt-core",
+        "software.amazon.awssdk:iam",
+        "software.amazon.awssdk:sso"
+      ].each { awsSdkShade(it) }
+    }
 
     compileOnly(libs.hadoop3.common) {
       exclude group: 'org.apache.avro', module: 'avro'
@@ -566,6 +594,40 @@ project(':iceberg-aws') {
   }
   check.dependsOn('validateS3SignerSpec')
   check.dependsOn integrationTest
+
+  if (shadeAwsSdk) {
+    shadowJar {
+      archiveClassifier.set(null)
+      configurations = [project.configurations.awsSdkShade]
+      zip64 true
+
+      from(project(':iceberg-aws-bundle').projectDir) {
+        include 'LICENSE'
+        include 'NOTICE'
+      }
+
+      dependencies {
+        exclude(dependency('org.slf4j:.*'))
+        exclude(dependency('org.apache.logging.log4j:.*'))
+        exclude(dependency('org.apache.logging.slf4j:.*'))
+      }
+
+      relocate 'software.amazon.awssdk', 'org.apache.iceberg.aws.shaded.software.amazon.awssdk'
+      relocate 'software.amazon.eventstream', 'org.apache.iceberg.aws.shaded.software.amazon.eventstream'
+      relocate 'software.amazon.s3', 'org.apache.iceberg.aws.shaded.software.amazon.s3'
+      relocate 'org.apache.http', 'org.apache.iceberg.aws.shaded.org.apache.http'
+      relocate 'io.netty', 'org.apache.iceberg.aws.shaded.io.netty'
+      relocate 'com.github.benmanes.caffeine', 'org.apache.iceberg.aws.shaded.com.github.benmanes.caffeine'
+      relocate 'com.google.errorprone', 'org.apache.iceberg.aws.shaded.com.google.errorprone'
+      relocate 'org.apache.commons', 'org.apache.iceberg.aws.shaded.org.apache.commons'
+      relocate 'org.checkerframework', 'org.apache.iceberg.aws.shaded.org.checkerframework'
+      relocate 'org.reactivestreams', 'org.apache.iceberg.aws.shaded.org.reactivestreams'
+    }
+
+    jar {
+      enabled = false
+    }
+  }
 }
 
 project(':iceberg-azure') {
